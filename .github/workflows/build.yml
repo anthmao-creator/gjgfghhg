@@ -362,4 +362,19 @@ jobs:
                               Bitmap bm = BitmapFactory.decodeFile(f[idx++ % f.length].getPath());
                               if (bm != null) d = new BitmapDrawable(getResources(), bm);
                           }
-                  
+                      }
+                      final Drawable dd = d != null ? d : gradient();
+                      runOnUiThread(() -> {
+                          ImageView in = front ? bgA : bgB, out = front ? bgB : bgA;
+                          front = !front;
+                          in.setImageDrawable(dd);
+                          in.animate().alpha(1f).setDuration(1500);
+                          out.animate().alpha(0f).setDuration(1500);
+                      });
+                  }).start();
+              }
+          }
+          EOF_FILE
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with: { name: TVHome-apk, path: app/build/outputs/apk/debug/app-debug.apk }
