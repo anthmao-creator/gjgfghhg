@@ -1,0 +1,365 @@
+name: Build APK
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.7 }
+      - name: Create project files
+        run: |
+          mkdir -p .
+          cat > settings.gradle <<'EOF_FILE'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "TVHome"
+          include ':app'
+          EOF_FILE
+          mkdir -p .
+          cat > build.gradle <<'EOF_FILE'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF_FILE
+          mkdir -p .
+          cat > gradle.properties <<'EOF_FILE'
+          org.gradle.jvmargs=-Xmx2g
+          EOF_FILE
+          mkdir -p app
+          cat > app/build.gradle <<'EOF_FILE'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.tvhome.launcher'
+              compileSdk 34
+              defaultConfig { applicationId 'com.tvhome.launcher'; minSdk 24; targetSdk 33; versionCode 1; versionName '1.0' }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+          }
+          EOF_FILE
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF_FILE'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:name="android.software.leanback" android:required="false"/>
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application android:label="TV Home"
+                  android:icon="@android:drawable/sym_def_app_icon"
+                  android:banner="@android:drawable/sym_def_app_icon"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true"
+                      android:launchMode="singleTask" android:screenOrientation="landscape"
+                      android:stateNotNeeded="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.HOME"/>
+                          <category android:name="android.intent.category.DEFAULT"/>
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF_FILE
+          mkdir -p app/src/main/java/com/tvhome/launcher
+          cat > app/src/main/java/com/tvhome/launcher/MainActivity.java <<'EOF_FILE'
+          package com.tvhome.launcher;
+
+          import android.app.Activity;
+          import android.content.ComponentName;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.content.pm.ResolveInfo;
+          import android.graphics.Bitmap;
+          import android.graphics.BitmapFactory;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.BitmapDrawable;
+          import android.graphics.drawable.Drawable;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.*;
+          import java.io.File;
+          import java.util.*;
+
+          public class MainActivity extends Activity {
+              static final String HAPP = "com.happproxy"; // пакет Happ
+              ImageView bgA, bgB;
+              boolean front;
+              int idx, n;
+              TextView wx;
+              LinearLayout row;
+              TextView wx;
+              Handler h = new Handler(Looper.getMainLooper());
+              Runnable tick = new Runnable() { public void run() { nextBg(); if (++n % 60 == 0) loadWeather(); h.postDelayed(this, 30000); } };
+
+              Runnable wxTick = new Runnable() { public void run() { loadWeather(); h.postDelayed(this, 1800000); } };
+
+              // Погода: Open-Meteo (без ключа), Екатеринбург
+              void loadWeather() {
+                  new Thread(() -> {
+                      String out = null;
+                      try {
+                          java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(
+                              "https://api.open-meteo.com/v1/forecast?latitude=56.84&longitude=60.61&current=temperature_2m,weather_code&timezone=Asia%2FYekaterinburg").openConnection();
+                          c.setConnectTimeout(8000); c.setReadTimeout(8000);
+                          java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getInputStream()));
+                          StringBuilder sb = new StringBuilder(); String ln;
+                          while ((ln = r.readLine()) != null) sb.append(ln);
+                          r.close();
+                          org.json.JSONObject cur = new org.json.JSONObject(sb.toString()).getJSONObject("current");
+                          long t = Math.round(cur.getDouble("temperature_2m"));
+                          out = "Екатеринбург  " + (t > 0 ? "+" : "") + t + "°  " + wmo(cur.getInt("weather_code"));
+                      } catch (Exception e) { }
+                      final String o = out;
+                      if (o != null) runOnUiThread(() -> wx.setText(o));
+                  }).start();
+              }
+
+              String wmo(int c) {
+                  if (c == 0) return "Ясно";
+                  if (c <= 2) return "Малооблачно";
+                  if (c == 3) return "Пасмурно";
+                  if (c == 45 || c == 48) return "Туман";
+                  if (c >= 51 && c <= 57) return "Морось";
+                  if (c >= 61 && c <= 67) return "Дождь";
+                  if (c >= 71 && c <= 77) return "Снег";
+                  if (c >= 80 && c <= 82) return "Ливень";
+                  if (c == 85 || c == 86) return "Снегопад";
+                  if (c >= 95) return "Гроза";
+                  return "";
+              }
+
+              int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
+
+              @Override protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                          | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+                  FrameLayout root = new FrameLayout(this);
+                  root.setBackgroundColor(Color.BLACK);
+                  bgA = new ImageView(this); bgB = new ImageView(this);
+                  bgA.setImageDrawable(gradient()); bgB.setAlpha(0f);
+                  for (ImageView v : new ImageView[]{bgA, bgB}) { v.setScaleType(ImageView.ScaleType.CENTER_CROP); root.addView(v, -1, -1); }
+                  View shade = new View(this); shade.setBackgroundColor(0x40000000); root.addView(shade, -1, -1);
+
+                  LinearLayout col = new LinearLayout(this);
+                  col.setOrientation(LinearLayout.VERTICAL);
+                  col.setPadding(dp(64), dp(40), dp(64), dp(24));
+                  root.addView(col, -1, -1);
+
+                  FrameLayout head = new FrameLayout(this);
+                  col.addView(head, -1, -2);
+                  LinearLayout clk = new LinearLayout(this);
+                  clk.setOrientation(LinearLayout.VERTICAL);
+                  head.addView(clk, -2, -2);
+                  TextClock t = new TextClock(this);
+                  t.setFormat12Hour("HH:mm"); t.setFormat24Hour("HH:mm");
+                  t.setTextSize(112); t.setTextColor(Color.WHITE);
+                  t.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
+                  clk.addView(t);
+                  TextClock d = new TextClock(this);
+                  d.setFormat12Hour("EEEE, d MMMM"); d.setFormat24Hour("EEEE, d MMMM");
+                  d.setTextSize(24); d.setTextColor(0xCCFFFFFF);
+                  clk.addView(d);
+                  wx = new TextView(this);
+                  wx.setText("Екатеринбург"); wx.setTextSize(26); wx.setTextColor(Color.WHITE);
+                  wx.setPadding(0, dp(12), 0, 0);
+                  clk.addView(wx);
+                  wx = new TextView(this);
+                  wx.setText("Екатеринбург  …"); wx.setTextSize(22); wx.setTextColor(Color.WHITE);
+                  wx.setPadding(0, dp(8), 0, 0);
+                  clk.addView(wx);
+
+                  LinearLayout pills = new LinearLayout(this);
+                  pills.setPadding(0, dp(16), 0, 0);
+                  head.addView(pills, new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.TOP));
+                  pills.addView(pill("VPN Happ", v -> {
+                      Intent i = getPackageManager().getLaunchIntentForPackage(HAPP);
+                      if (i != null) startActivity(i);
+                      else Toast.makeText(this, "Happ не установлен", Toast.LENGTH_LONG).show();
+                  }));
+                  pills.addView(pill("Настройки", v -> startActivity(new Intent(Settings.ACTION_SETTINGS))));
+
+                  TextView lab = new TextView(this);
+                  lab.setText("ПРИЛОЖЕНИЯ"); lab.setTextSize(14); lab.setLetterSpacing(0.15f); lab.setTextColor(0xAAFFFFFF);
+                  lab.setPadding(0, dp(40), 0, dp(8));
+                  col.addView(lab);
+                  HorizontalScrollView hs = new HorizontalScrollView(this);
+                  hs.setHorizontalScrollBarEnabled(false); hs.setClipToPadding(false); hs.setClipChildren(false);
+                  hs.setPadding(0, dp(16), 0, dp(16));
+                  row = new LinearLayout(this);
+                  hs.addView(row);
+                  col.addView(hs, -1, -2);
+                  setContentView(root);
+              }
+
+              @Override protected void onResume() {
+                  super.onResume();
+                  loadApps();
+                  loadWeather();
+                  if (row.getChildCount() > 0) row.getChildAt(0).requestFocus();
+                  h.removeCallbacks(tick);
+                  h.post(tick);
+                  h.removeCallbacks(wxTick);
+                  h.post(wxTick);
+              }
+
+              @Override protected void onPause() { super.onPause(); h.removeCallbacks(tick); h.removeCallbacks(wxTick); }
+
+              @Override public void onBackPressed() { }
+
+              void focusStyle(View v, int base) {
+                  GradientDrawable g = new GradientDrawable();
+                  g.setCornerRadius(dp(18)); g.setColor(base);
+                  v.setBackground(g);
+                  v.setOnFocusChangeListener((x, f) -> {
+                      g.setColor(f ? 0xFF3B82F6 : base);
+                      x.animate().scaleX(f ? 1.1f : 1f).scaleY(f ? 1.1f : 1f).setDuration(150);
+                  });
+              }
+
+              TextView pill(String s, View.OnClickListener c) {
+                  TextView t = new TextView(this);
+                  t.setText(s); t.setTextSize(20); t.setTextColor(Color.WHITE);
+                  t.setPadding(dp(28), dp(14), dp(28), dp(14));
+                  t.setFocusable(true); t.setOnClickListener(c);
+                  focusStyle(t, 0x44FFFFFF);
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+                  lp.leftMargin = dp(14); t.setLayoutParams(lp);
+                  return t;
+              }
+
+              View tile(ResolveInfo r) {
+                  PackageManager pm = getPackageManager();
+                  LinearLayout c = new LinearLayout(this);
+                  c.setOrientation(LinearLayout.VERTICAL); c.setGravity(Gravity.CENTER_HORIZONTAL);
+                  c.setPadding(dp(10), dp(10), dp(10), dp(10));
+                  Drawable d = r.activityInfo.loadBanner(pm);
+                  boolean banner = d != null;
+                  if (!banner) d = r.loadIcon(pm);
+                  ImageView iv = new ImageView(this);
+                  iv.setImageDrawable(d);
+                  iv.setScaleType(banner ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
+                  c.addView(iv, dp(224), dp(126));
+                  TextView tv = new TextView(this);
+                  tv.setText(r.loadLabel(pm)); tv.setTextColor(Color.WHITE); tv.setTextSize(16);
+                  tv.setSingleLine(true); tv.setPadding(0, dp(8), 0, 0);
+                  c.addView(tv);
+                  c.setFocusable(true);
+                  focusStyle(c, 0x22FFFFFF);
+                  ComponentName cn = new ComponentName(r.activityInfo.packageName, r.activityInfo.name);
+                  c.setOnClickListener(v -> {
+                      try { startActivity(new Intent(Intent.ACTION_MAIN).setComponent(cn).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
+                      catch (Exception e) { Toast.makeText(this, "Не удалось открыть", Toast.LENGTH_SHORT).show(); }
+                  });
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+                  lp.rightMargin = dp(16); c.setLayoutParams(lp);
+                  return c;
+              }
+
+              void loadApps() {
+                  PackageManager pm = getPackageManager();
+                  row.removeAllViews();
+                  Map<String, ResolveInfo> m = new LinkedHashMap<>();
+                  for (String cat : new String[]{Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER})
+                      for (ResolveInfo r : pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(cat), 0)) {
+                          String p = r.activityInfo.packageName;
+                          if (!p.equals(getPackageName()) && !m.containsKey(p)) m.put(p, r);
+                      }
+                  List<ResolveInfo> l = new ArrayList<>(m.values());
+                  Collections.sort(l, (a, c) -> a.loadLabel(pm).toString().compareToIgnoreCase(c.loadLabel(pm).toString()));
+                  for (ResolveInfo r : l) row.addView(tile(r));
+              }
+
+              // Погода: Open-Meteo (без ключа), Екатеринбург, обновление раз в 30 минут
+              void loadWeather() {
+                  new Thread(() -> {
+                      try {
+                          java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(
+                                  "https://api.open-meteo.com/v1/forecast?latitude=56.84&longitude=60.61&current=temperature_2m,weather_code&timezone=auto").openConnection();
+                          c.setConnectTimeout(8000); c.setReadTimeout(8000);
+                          java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getInputStream()));
+                          StringBuilder sb = new StringBuilder(); String ln;
+                          while ((ln = r.readLine()) != null) sb.append(ln);
+                          r.close();
+                          org.json.JSONObject cur = new org.json.JSONObject(sb.toString()).getJSONObject("current");
+                          long t = Math.round(cur.getDouble("temperature_2m"));
+                          String s = "Екатеринбург  " + (t > 0 ? "+" : "") + t + "°  " + wmo(cur.getInt("weather_code"));
+                          runOnUiThread(() -> wx.setText(s));
+                      } catch (Exception e) { }
+                  }).start();
+              }
+
+              String wmo(int c) {
+                  if (c == 0) return "ясно";
+                  if (c <= 2) return "малооблачно";
+                  if (c == 3) return "пасмурно";
+                  if (c == 45 || c == 48) return "туман";
+                  if (c >= 51 && c <= 57) return "морось";
+                  if (c >= 61 && c <= 67) return "дождь";
+                  if (c >= 71 && c <= 77) return "снег";
+                  if (c >= 80 && c <= 82) return "ливень";
+                  if (c == 85 || c == 86) return "снегопад";
+                  if (c >= 95) return "гроза";
+                  return "";
+              }
+
+              // Фоны из сети: Bing (картинки дня), запасной источник picsum.photos; офлайн: кэш, затем градиент
+              List<String> urls = new ArrayList<>();
+              int net;
+
+              Drawable gradient() {
+                  int[][] c = {{0xFF0F2027, 0xFF2C5364}, {0xFF42275A, 0xFF734B6D}, {0xFF1D2B64, 0xFFF8CDDA}, {0xFF141E30, 0xFF243B55}, {0xFF3A1C71, 0xFFD76D77}};
+                  return new GradientDrawable(GradientDrawable.Orientation.TL_BR, c[idx++ % c.length]);
+              }
+
+              byte[] get(String u) throws Exception {
+                  java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+                  c.setConnectTimeout(10000); c.setReadTimeout(15000); c.setInstanceFollowRedirects(true);
+                  java.io.InputStream in = c.getInputStream();
+                  java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+                  byte[] b = new byte[16384]; int n;
+                  while ((n = in.read(b)) > 0) o.write(b, 0, n);
+                  in.close();
+                  return o.toByteArray();
+              }
+
+              Drawable decode(byte[] d) {
+                  BitmapFactory.Options o = new BitmapFactory.Options();
+                  o.inPreferredConfig = Bitmap.Config.RGB_565;
+                  Bitmap bm = BitmapFactory.decodeByteArray(d, 0, d.length, o);
+                  return bm == null ? null : new BitmapDrawable(getResources(), bm);
+              }
+
+              void nextBg() {
+                  new Thread(() -> {
+                      Drawable d = null;
+                      try {
+                          if (urls.isEmpty()) {
+                              try {
+                                  org.json.JSONArray a = new org.json.JSONObject(new String(
+                                      get("https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=8&mkt=en-US"), "UTF-8")).getJSONArray("images");
+                                  for (int i = 0; i < a.length(); i++)
+                                      urls.add("https://www.bing.com" + a.getJSONObject(i).getString("urlbase") + "_1920x1080.jpg");
+                              } catch (Exception e) { }
+                              if (urls.isEmpty()) for (int i = 1; i <= 8; i++) urls.add("https://picsum.photos/1920/1080?random=" + i);
+                          }
+                          int k = net++ % urls.size();
+                          byte[] data = get(urls.get(k));
+                          d = decode(data);
+                          if (d != null) {
+                              java.io.FileOutputStream f = new java.io.FileOutputStream(new File(getCacheDir(), "bg" + k + ".jpg"));
+                              f.write(data); f.close();
+                          }
+                      } catch (Exception e) { }
+                      if (d == null) {
+                          File[] f = getCacheDir().listFiles((x, n) -> n.startsWith("bg"));
+                          if (f != null && f.length > 0) {
+                              Bitmap bm = BitmapFactory.decodeFile(f[idx++ % f.length].getPath());
+                              if (bm != null) d = new BitmapDrawable(getResources(), bm);
+                          }
+                  
